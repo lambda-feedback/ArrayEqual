@@ -1,15 +1,21 @@
-# Evaluation Function Template Repository
+# ArrayEqual Evaluation Function
 
-This template repository contains the boilerplate code needed in order to create an AWS Lambda function that can be written by any tutor to grade a response area in any way they like.
+[![Request Production Deploy](https://img.shields.io/badge/Request-Production_Deploy-2ea44f?style=for-the-badge)](https://github.com/lambda-feedback/ArrayEqual/issues/new?template=release-request.yml)
 
-This version is specifically for python, however the ultimate goal is to make similar boilerplate repositories in any language, allowing tutors the freedom to code in what they feel most comfortable with.
+Compares a student's response array against an answer array, checking whether all elements are within the supplied tolerances. Uses [numpy.allclose](https://numpy.org/doc/stable/reference/generated/numpy.allclose.html) under the hood, so arrays of any regular shape (1D, 2D, etc.) are supported.
 
 ## Table of Contents
-- [Evaluation Function Template Repository](#evaluation-function-template-repository)
+- [ArrayEqual Evaluation Function](#arrayequal-evaluation-function)
   - [Table of Contents](#table-of-contents)
   - [Repository Structure](#repository-structure)
-  - [Usage](#usage)
-    - [Getting Started](#getting-started)
+  - [Function Reference](#function-reference)
+    - [Inputs](#inputs)
+    - [Parameters](#parameters)
+    - [Output](#output)
+    - [Error handling](#error-handling)
+    - [Examples](#examples)
+  - [Development](#development)
+    - [Running tests locally](#running-tests-locally)
   - [How it works](#how-it-works)
     - [Docker & Amazon Web Services (AWS)](#docker--amazon-web-services-aws)
     - [Middleware Functions](#middleware-functions)
@@ -19,78 +25,156 @@ This version is specifically for python, however the ultimate goal is to make si
 
 ## Repository Structure
 
-```bash
+```
 app/
     __init__.py
-    evaluation.py # Script containing the main evaluation_function
-    docs.md # Documentation page for this function (required)
-    evaluation_tests.py # Unittests for the main evaluation_function
-    requirements.txt # list of packages needed for algorithm.py
-    Dockerfile # for building whole image to deploy to AWS
+    evaluation.py        # Main evaluation_function implementation
+    evaluation_tests.py  # Unit tests for evaluation_function
+    requirements.txt     # Python dependencies (numpy, evaluation-function-utils)
+    Dockerfile           # Docker image definition for AWS Lambda
+    docs/
+        user.md          # User-facing documentation
+        dev.md           # Developer notes
 
 .github/
     workflows/
-        test-and-deploy.yml # Testing and deployment pipeline
+        test-lint.yml              # Lint and test on pull requests
+        staging-deploy.yml         # Deploy to staging on push to main
+        production-deploy.yml      # Manual production deployment
+        pre_production_tests.yml   # Pre-production database validation tests
 
-config.json # Specify the name of the evaluation function in this file
-.gitignore
+config.json   # Evaluation function name ("arrayEqual")
 ```
 
-## Usage
+## Function Reference
 
-### Getting Started
+### Inputs
 
-1. Clone this repository
-2. Change the name of the evaluation function in `config.json`
-3. The name must be unique. To view existing grading functions, go to:
+| Field      | Type    | Description                              |
+|------------|---------|------------------------------------------|
+| `response` | array   | Student's submitted array                |
+| `answer`   | array   | Correct answer array                     |
+| `params`   | object  | Optional parameters (see below)          |
 
-   - [Staging API Gateway Integrations](https://eu-west-2.console.aws.amazon.com/apigateway/main/develop/integrations/attach?api=c1o0u8se7b&region=eu-west-2&routes=0xsoy4q)
-   - [Production API Gateway Integrations](https://eu-west-2.console.aws.amazon.com/apigateway/main/develop/integrations/attach?api=cttolq2oph&integration=qpbgva8&region=eu-west-2&routes=0xsoy4q)
+Both `response` and `answer` are parsed with `np.array(dtype=np.float32)`.
 
-4. Merge commits into the default branch
-   - This will trigger the `test-and-deploy.yml` workflow, which will build the docker image, push it to a shared ECR repository, then call the backend `grading-function/ensure` route to build the necessary infrastructure to make the function available from the client app.
+### Parameters
 
-5. You are now ready to start developing your function:
-   
-   - Edit the `app/evaluation.py` file, which ultimately gets called when the function is given the `eval` command
-   - Edit the `app/evaluation_tests.py` file to add tests which get run:
-       - Every time you commit to this repo, before the image is built and deployed 
-       - Whenever the `healthcheck` command is supplied to the deployed function
-   - Edit the `app/docs.md` file to reflect your changes. This file is baked into the function's image, and is made available using the `docs` command. This feature is used to display this function's documentation on our [Documentation](https://lambda-feedback.github.io/Documentation/) website once it's been hooked up!
+| Parameter                        | Type    | Default | Description                                                                 |
+|----------------------------------|---------|---------|-----------------------------------------------------------------------------|
+| `atol`                           | number  | `0`     | Absolute tolerance — maximum allowed absolute difference between elements   |
+| `rtol`                           | number  | `0`     | Relative tolerance — maximum allowed relative difference between elements   |
+| `feedback_for_incorrect_response`| string  | none    | If set, replaces the default feedback message for all incorrect responses   |
 
----
+`atol` and `rtol` map directly to the corresponding parameters of `numpy.allclose`.
+
+### Output
+
+```json
+{
+  "is_correct": true
+}
+```
+
+When the response is incorrect:
+
+```json
+{
+  "is_correct": false,
+  "feedback": "<message>"
+}
+```
+
+### Error handling
+
+- If `answer` contains non-numeric or empty values an exception is raised (the question is misconfigured).
+- If `response` contains non-numeric values, `is_correct: false` is returned with the feedback `"Only numbers are permitted."`.
+- If `response` contains empty fields, `is_correct: false` is returned with the feedback `"Response has at least one empty field."`.
+
+### Examples
+
+**Exact match (no tolerance)**
+
+```json
+{
+  "response": [1, 2, 3],
+  "answer":   [1, 2, 3],
+  "params":   {}
+}
+```
+
+```json
+{ "is_correct": true }
+```
+
+**2D array with absolute tolerance**
+
+```json
+{
+  "response": [[1, 2], [3, 4]],
+  "answer":   [[1, 2], [3, 4.05]],
+  "params":   { "atol": 0.1 }
+}
+```
+
+```json
+{ "is_correct": true }
+```
+
+**Custom feedback for incorrect response**
+
+```json
+{
+  "response": [[1, 1], [1, 1]],
+  "answer":   [[1, 1], [1, 0]],
+  "params":   { "feedback_for_incorrect_response": "Check the last element of the second row." }
+}
+```
+
+```json
+{ "is_correct": false, "feedback": "Check the last element of the second row." }
+```
+
+## Development
+
+### Running tests locally
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install pytest -r app/requirements.txt
+pytest --tb=auto -v
+```
 
 ## How it works
 
-The function is built on top of a custom base layer, [BaseEvaluationFunctionLayer](https://github.com/lambda-feedback/BaseEvalutionFunctionLayer), which tools, tests and schema checking relevant to all evaluation functions.
+The function is built on top of a custom base layer, [BaseEvaluationFunctionLayer](https://github.com/lambda-feedback/BaseEvalutionFunctionLayer), which provides tooling, tests and schema checking common to all evaluation functions.
 
 ### Docker & Amazon Web Services (AWS)
 
-The grading scripts are hosted AWS Lambda, using containers to run a docker image of the app. Docker is a popular tool in software development that allows programs to be hosted on any machine by bundling all its requirements and dependencies into a single file called an **image**.
-
-Images are run within **containers** on AWS, which give us a lot of flexibility over what programming language and packages/libraries can be used. For more information on Docker, read this [introduction to containerisation](https://www.freecodecamp.org/news/a-beginner-friendly-introduction-to-containers-vms-and-docker-79a9e3e119b/). To learn more about AWS Lambda, click [here](https://geekflare.com/aws-lambda-for-beginners/).
+The evaluation function runs on AWS Lambda inside a Docker container. Docker bundles the app and all its dependencies into a single image, giving full control over the Python version and packages used. For more information on Docker, read this [introduction to containerisation](https://www.freecodecamp.org/news/a-beginner-friendly-introduction-to-containers-vms-and-docker-79a9e3e119b/). To learn more about AWS Lambda, click [here](https://geekflare.com/aws-lambda-for-beginners/).
 
 ### Middleware Functions
-In order to run the algorithm and schema on AWS Lambda, some middleware functions have been provided to handle, validate and return the data so all you need to worry about is the evaluation script and testing.
 
-The code needed to build the image using all the middleware functions are available in the [BaseEvaluationFunctionLayer](https://github.com/lambda-feedback/BaseEvalutionFunctionLayer) repository.
+Middleware provided by [BaseEvaluationFunctionLayer](https://github.com/lambda-feedback/BaseEvalutionFunctionLayer) handles request parsing, input validation and response formatting, so this repository only needs to implement the core comparison logic in `evaluation.py`.
 
 ### GitHub Actions
-Whenever a commit is made to the GitHub repository, the new code will go through a pipeline, where it will be tested for syntax errors and code coverage. The pipeline used is called **GitHub Actions** and the scripts for these can be found in `.github/workflows/`.
 
-On top of that, when starting a new evaluation function, you will have to complete a set of unit test scripts, which not only make sure your code is reliable, but also helps you to build a _specification_ for how the code should function before you start programming.
+Three automated pipelines are configured under `.github/workflows/`:
 
-Once the code passes all these tests, it will then be uploaded to AWS and will be deployed and ready to go in only a few minutes.
+- **`test-lint.yml`** — runs on every pull request; lints with flake8 and runs the unit test suite.
+- **`staging-deploy.yml`** — runs on every push to `main`; builds the Docker image and deploys to the staging environment after tests pass.
+- **`production-deploy.yml`** — manually triggered; runs database validation tests then promotes the image to production.
 
 ## Pre-requisites
-Although all programming can be done through the GitHub interface, it is recommended you do this locally on your machine. To do this, you must have installed:
 
-- Python 3.8 or higher.
+To develop locally you will need:
 
-- GitHub Desktop or the `git` CLI.
-
-- A code editor such as Atom, VS Code, or Sublime.
-
-Copy this template over by clicking **Use this template** button found in the repository on GitHub. Save it to the `lambda-feedback` Organisation.
+- Python 3.8 or higher
+- `git` CLI or GitHub Desktop
+- A code editor (VS Code, PyCharm, etc.)
+- Docker (optional — only needed to build/test the image locally)
 
 ## Contact
+
+For questions or issues, open a GitHub issue or visit the [lambda-feedback organisation](https://github.com/lambda-feedback).

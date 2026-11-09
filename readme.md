@@ -170,7 +170,7 @@ Three automated pipelines are configured under `.github/workflows/`:
 
 To develop locally you will need:
 
-- Python 3.8 or higher
+- Python 3.12 or higher
 - `git` CLI or GitHub Desktop
 - A code editor (VS Code, PyCharm, etc.)
 - Docker (optional — only needed to build/test the image locally)
